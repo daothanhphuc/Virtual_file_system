@@ -1,7 +1,12 @@
+#define _XOPEN_SOURCE 700
 #include <fuse.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "logging.h"
 #include "permissions.h"
 
@@ -12,9 +17,45 @@ static char virtual_file[MAX_FILE_SIZE];
 static size_t virtual_file_size = 0;
 static int virtual_file_permissions = 0644; // Default permissions: rw-r--r--
 
-// --- SỬA 1: Thêm lại tham số fuse_file_info *fi ---
-static int vfs_getattr(const char *path, struct stat *stbuf) { // Lưu ý: getattr chuẩn FUSE 2 không có fi, nhưng FUSE 3 có. Với code của bạn giữ nguyên getattr như cũ là OK với FUSE 2.
+// Helper: create .backup dir and write current file content into timestamped file
+static int save_backup(const char *path) {
+    const char *backup_dir = ".backup";
+    struct stat st = {0};
+    if (stat(backup_dir, &st) == -1) {
+        if (mkdir(backup_dir, 0755) == -1) {
+            return -1;
+        }
+    }
+
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &tm);
+
+    // sanitize filename (remove leading '/')
+    const char *fname = path;
+    if (fname[0] == '/') fname++;
+    if (fname[0] == '\0') fname = "root";
+
+    char outpath[1024];
+    snprintf(outpath, sizeof(outpath), "%s/%s_%s.bak", backup_dir, fname, ts);
+
+    FILE *f = fopen(outpath, "wb");
+    if (!f) return -1;
+    if (virtual_file_size > 0) {
+        size_t written = fwrite(virtual_file, 1, virtual_file_size, f);
+        (void)written;
+    }
+    fclose(f);
+    return 0;
+}
+
+static int vfs_getattr(const char *path, struct stat *stbuf) {
     memset(stbuf, 0, sizeof(struct stat));
+
+    stbuf->st_uid = getuid(); // <--- Thêm dòng này
+    stbuf->st_gid = getgid(); // <--- Thêm dòng này
 
     if (strcmp(path, "/") == 0) {
         stbuf->st_mode = S_IFDIR | 0755;
@@ -24,47 +65,48 @@ static int vfs_getattr(const char *path, struct stat *stbuf) { // Lưu ý: getat
         stbuf->st_nlink = 1;
         stbuf->st_size = virtual_file_size;
     } else {
-        log_message("getattr: File not found\n");
+        struct fuse_context *ctx = fuse_get_context();
+        if (ctx) log_event("GETATTR", path, ctx->pid, ctx->uid, -ENOENT);
         return -ENOENT;
     }
 
-    log_message("getattr: Success\n");
+    struct fuse_context *ctx = fuse_get_context();
+    if (ctx) log_event("GETATTR", path, ctx->pid, ctx->uid, 0);
     return 0;
 }
 
-// --- SỬA 2: Khôi phục tham số fi và sửa lỗi gọi hàm check_permissions ---
 static int vfs_open(const char *path, struct fuse_file_info *fi) {
+    struct fuse_context *ctx = fuse_get_context();
     if (strcmp(path, "/virtual_file") != 0) {
-        log_message("open: File not found\n");
+        if (ctx) log_event("OPEN", path, ctx->pid, ctx->uid, -ENOENT);
         return -ENOENT;
     }
 
-    // SỬA: Truyền thêm fi->flags vào tham số đầu tiên
-    if (!check_permissions(fi->flags, virtual_file_permissions)) {
-        log_message("open: Permission denied\n");
+    if (!check_permissions(fi->flags, virtual_file_permissions, get_virtual_file_uid(), get_virtual_file_gid())) {
+        if (ctx) log_event("OPEN", path, ctx->pid, ctx->uid, -EACCES);
         return -EACCES;
     }
 
-    log_message("open: Success\n");
+    if (ctx) log_event("OPEN", path, ctx->pid, ctx->uid, 0);
     return 0;
 }
 
-// --- SỬA 3: Khôi phục tham số fi để đúng chuẩn function pointer ---
 static int vfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    (void) fi; // Đánh dấu là đã dùng để compiler không cảnh báo unused variable
+    (void) fi;
+    struct fuse_context *ctx = fuse_get_context();
 
     if (strcmp(path, "/virtual_file") != 0) {
-        log_message("read: File not found\n");
+        if (ctx) log_event("READ", path, ctx->pid, ctx->uid, -ENOENT);
         return -ENOENT;
     }
 
     if (!(virtual_file_permissions & 0444)) {
-        log_message("read: Permission denied\n");
+        if (ctx) log_event("READ", path, ctx->pid, ctx->uid, -EACCES);
         return -EACCES;
     }
 
     if (offset >= virtual_file_size) {
-        log_message("read: Offset beyond file size\n");
+        if (ctx) log_event("READ", path, ctx->pid, ctx->uid, 0);
         return 0;
     }
 
@@ -73,79 +115,102 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset, stru
     }
 
     memcpy(buf, virtual_file + offset, size);
-    log_message("read: Success\n");
+    if (ctx) log_event("READ", path, ctx->pid, ctx->uid, (int)size);
     return size;
 }
 
-// --- SỬA 4: Khôi phục tham số fi ---
 static int vfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     (void) fi;
+    struct fuse_context *ctx = fuse_get_context();
 
     if (strcmp(path, "/virtual_file") != 0) {
-        log_message("write: File not found\n");
+        if (ctx) log_event("WRITE", path, ctx->pid, ctx->uid, -ENOENT);
         return -ENOENT;
     }
 
     if (!(virtual_file_permissions & 0222)) {
-        log_message("write: Permission denied\n");
+        if (ctx) log_event("WRITE", path, ctx->pid, ctx->uid, -EACCES);
         return -EACCES;
     }
 
     if (offset + size > MAX_FILE_SIZE) {
-        log_message("write: File too large\n");
+        if (ctx) log_event("WRITE", path, ctx->pid, ctx->uid, -EFBIG);
         return -EFBIG;
     }
+
+    // Save a backup of current content before modification
+    save_backup(path);
 
     memcpy(virtual_file + offset, buf, size);
     if (offset + size > virtual_file_size) {
         virtual_file_size = offset + size;
     }
 
-    log_message("write: Success\n");
+    if (ctx) log_event("WRITE", path, ctx->pid, ctx->uid, (int)size);
     return size;
 }
 
-// Hàm đọc thư mục (để sửa lỗi ls)
 static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
     (void) offset;
     (void) fi;
 
-    // Chỉ có thư mục gốc "/" là hợp lệ
     if (strcmp(path, "/") != 0)
         return -ENOENT;
 
-    // Khai báo các thư mục mặc định "." và ".."
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
-
-    // Hiển thị file ảo của chúng ta
     filler(buf, "virtual_file", NULL, 0);
 
+    struct fuse_context *ctx = fuse_get_context();
+    if (ctx) log_event("READDIR", path, ctx->pid, ctx->uid, 0);
     return 0;
 }
 
-// Hàm cắt file (để sửa lỗi echo > file)
 static int vfs_truncate(const char *path, off_t size) {
+    struct fuse_context *ctx = fuse_get_context();
     if (strcmp(path, "/virtual_file") != 0) {
+        if (ctx) log_event("TRUNCATE", path, ctx->pid, ctx->uid, -ENOENT);
         return -ENOENT;
     }
 
     if (size > MAX_FILE_SIZE) {
+        if (ctx) log_event("TRUNCATE", path, ctx->pid, ctx->uid, -EFBIG);
         return -EFBIG;
     }
 
-    // Cập nhật lại kích thước file
+    // Backup before truncation
+    save_backup(path);
+
     virtual_file_size = size;
+    if (ctx) log_event("TRUNCATE", path, ctx->pid, ctx->uid, 0);
     return 0;
 }
-// Hàm đổi quyền file (chmod)
+
 static int vfs_chmod(const char *path, mode_t mode) {
+    struct fuse_context *ctx = fuse_get_context();
     if (strcmp(path, "/virtual_file") != 0) {
-        log_message("chmod: File not found\n");
+        if (ctx) log_event("CHMOD", path, ctx->pid, ctx->uid, -ENOENT);
         return -ENOENT;
     }
     update_virtual_file_permissions(&virtual_file_permissions, mode);
-    log_message("chmod: Success\n");
+    if (ctx) log_event("CHMOD", path, ctx->pid, ctx->uid, 0);
+    return 0;
+}
+
+// Instead of permanently deleting, move content to .backup and clear in-memory file
+static int vfs_unlink(const char *path) {
+    struct fuse_context *ctx = fuse_get_context();
+    if (strcmp(path, "/virtual_file") != 0) {
+        if (ctx) log_event("UNLINK", path, ctx->pid, ctx->uid, -ENOENT);
+        return -ENOENT;
+    }
+
+    // Save backup and clear content
+    save_backup(path);
+    memset(virtual_file, 0, sizeof(virtual_file));
+    virtual_file_size = 0;
+
+    if (ctx) log_event("UNLINK", path, ctx->pid, ctx->uid, 0);
     return 0;
 }
 
@@ -154,7 +219,8 @@ struct fuse_operations vfs_operations = {
     .open = vfs_open,
     .read = vfs_read,
     .write = vfs_write,
-    .readdir = vfs_readdir,  
+    .readdir = vfs_readdir,
     .truncate = vfs_truncate,
     .chmod = vfs_chmod,
+    .unlink = vfs_unlink,
 };

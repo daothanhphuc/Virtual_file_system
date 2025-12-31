@@ -5,8 +5,10 @@
 #include <stdio.h>
 
 // Virtual file metadata (should be moved to a struct in real code)
-static uid_t virtual_file_uid = 0; // Owner UID
-static gid_t virtual_file_gid = 0; // Owner GID
+// Initialize to current user so they can read/write the file
+static uid_t virtual_file_uid = 0; // Will be set to current UID on init
+static gid_t virtual_file_gid = 0; // Will be set to current GID on init
+static int initialized = 0;
 
 // Helper: get permission bits for user/group/other
 static int get_permission_bits(int mode, int is_user, int is_group) {
@@ -52,7 +54,21 @@ void update_virtual_file_owner(uid_t *file_uid, gid_t *file_gid, uid_t new_uid, 
 }
 
 // Expose for use in other files
-uid_t get_virtual_file_uid() { return virtual_file_uid; }
-gid_t get_virtual_file_gid() { return virtual_file_gid; }
+uid_t get_virtual_file_uid() {
+    if (!initialized) {
+        virtual_file_uid = getuid();
+        virtual_file_gid = getgid();
+        initialized = 1;
+    }
+    return virtual_file_uid;
+}
+gid_t get_virtual_file_gid() {
+    if (!initialized) {
+        virtual_file_uid = getuid();
+        virtual_file_gid = getgid();
+        initialized = 1;
+    }
+    return virtual_file_gid;
+}
 void set_virtual_file_uid(uid_t uid) { virtual_file_uid = uid; }
 void set_virtual_file_gid(gid_t gid) { virtual_file_gid = gid; }
