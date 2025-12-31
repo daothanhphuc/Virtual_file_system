@@ -138,6 +138,16 @@ static int vfs_truncate(const char *path, off_t size) {
     virtual_file_size = size;
     return 0;
 }
+// Hàm đổi quyền file (chmod)
+static int vfs_chmod(const char *path, mode_t mode) {
+    if (strcmp(path, "/virtual_file") != 0) {
+        log_message("chmod: File not found\n");
+        return -ENOENT;
+    }
+    update_virtual_file_permissions(&virtual_file_permissions, mode);
+    log_message("chmod: Success\n");
+    return 0;
+}
 
 struct fuse_operations vfs_operations = {
     .getattr = vfs_getattr,
@@ -146,4 +156,5 @@ struct fuse_operations vfs_operations = {
     .write = vfs_write,
     .readdir = vfs_readdir,  
     .truncate = vfs_truncate,
+    .chmod = vfs_chmod,
 };
