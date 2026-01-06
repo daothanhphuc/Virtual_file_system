@@ -1,19 +1,6 @@
 # Virtual File System (FUSE) — Enhanced
 
-This repository contains a custom FUSE-based virtual file system written in C. It features enhanced logging, a "Recycle Bin" style backup mechanism, and a CLI tool for log querying.
-
-## 🚀 Features
-
-1.  **In-Memory Storage:** Files are stored in RAM (Linked List structure).
-2.  **Auto-Backup (Versioning):**
-    - Every time a file is modified (`WRITE`), the old content is saved to `.backup/`.
-    - Every time a file is deleted (`UNLINK`), the content is saved to `.backup/`.
-3.  **Detailed Logging:** Tracks User ID, Process ID, Timestamp, Operation, and Path.
-4.  **CLI Query Tool:** A separate tool to filter and search logs.
-
----
-
-## 🛠 Prerequisites
+### Prerequisites
 
 This project is built for **Linux** (or **WSL2** on Windows) using **FUSE 2.x**.
 
@@ -26,9 +13,8 @@ sudo apt-get update
 sudo apt-get install build-essential pkg-config libfuse-dev
 ```
 
-⚙️ Compilation
+### Compilation
 We use specific flags (-D_FILE_OFFSET_BITS=64 and -DFUSE_USE_VERSION=26) to ensure compatibility with modern 64-bit systems while using the FUSE 2 API.
-
 1. Build the File System (Server)
 
 ```bash
@@ -41,8 +27,22 @@ gcc -Wall -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=26 main.c operations.c permi
 gcc -Wall -o cli_query cli_query.c
 ```
 
-▶️ How to Run
+### How to Run
 Note: You will need two terminal windows.
+
+Create a sample source folder
+
+```bash
+mkdir -p ~/my_source_data
+
+#write sample data into folder
+echo "Day la file that 1" > ~/my_source_data/test.txt
+echo "Day la file that 222" > ~/my_source_data/test_2.txt
+
+#visualize to check
+ls
+cat ~/my_source_data/test.txt
+```
 
 Step 1: Prepare Mount Point (Terminal 1)
 
@@ -51,11 +51,11 @@ Step 1: Prepare Mount Point (Terminal 1)
 mkdir -p /tmp/vfs_mount
 
 # Run the VFS in foreground mode
-./vfs -f /tmp/vfs_mount
+./vfs -f ~/my_source_data /tmp/vfs_mount
 
 ```
 
-⚠️ The terminal will hang/pause here. This is normal. The server is running.
+The terminal will hang/pause here. This is normal. The server is running.
 
 Step 2: Interact with the File System (Terminal 2)
 Open a new terminal tab and navigate to the project folder.
@@ -63,28 +63,28 @@ Open a new terminal tab and navigate to the project folder.
 Create a file:
 
 ```bash
-echo "Hello World" > /tmp/vfs_mount/virtual_file
+echo "Hello World" > /tmp/vfs_mount/test.txt
 ```
 
 Read the file:
 
 ```bash
-cat /tmp/vfs_mount/virtual_file
+cat /tmp/vfs_mount/test.txt
 ```
 
 Modify the file (Triggers Backup):
 
 ```bash
-echo "New Content" > /tmp/vfs_mount/virtual_file
+echo "New Content" > /tmp/vfs_mount/test.txt
 ```
 
 Delete the file (Triggers Recycle Bin):
 
 ```bash
-rm /tmp/vfs_mount/virtual_file
+rm /tmp/vfs_mount/test.txt
 ```
 
-♻️ Data Recovery (How to Restore)
+### Data Recovery (How to Restore)
 When a file is modified or deleted, a backup is automatically saved in the hidden .backup folder.
 
 1. List available backups
@@ -109,30 +109,69 @@ cat .backup/virtual_file_20251231_181918.bak
 Scenario A: If the file was deleted
 
 ```bash
-cp .backup/virtual_file_20251231_181918.bak /tmp/vfs_mount/virtual_file
+cp .backup/virtual_file_20251231_181918.bak /tmp/vfs_mount/test.txt
 ```
 
 Scenario B: If the file exists but has wrong content Overwrite the current file with the backup:
 
 ```bash
-cp .backup/virtual_file_20251231_181918.bak /tmp/vfs_mount/virtual_file
+cp .backup/virtual_file_20251231_181918.bak /tmp/vfs_mount/test.txt
 ```
 
-🔍 Using the CLI Log Tool
+### Check Permissions (chmod)
+
+1. Change the file permissions to none (no read/write/execute):
+   ```bash
+   chmod 000 virtual_file
+   ```
+   Now, reading or writing should fail:
+   ```bash
+   cat virtual_file           # Permission denied
+   echo "test" > virtual_file # Permission denied
+   ```
+2. Set the file to read-only:
+   ```bash
+   chmod 444 virtual_file
+   cat virtual_file           # Should succeed
+   echo "test" > virtual_file # Permission denied
+   ```
+3. Set the file to write-only:
+   ```bash
+   chmod 222 virtual_file
+   cat virtual_file           # Permission denied
+   echo "test" > virtual_file # Should succeed
+   ```
+4. Restore to read/write:
+   ```bash
+   chmod 644 virtual_file
+   ```
+   Both read and write should work.
+
+### Change File Owner/Group (chown)
+
+1. Change the file owner (requires root):
+   ```bash
+   sudo chown <newuser>:<newgroup> virtual_file
+   ```
+2. Test access as the new user:
+   ```bash
+   sudo -u <newuser> cat virtual_file
+   sudo -u <newuser> echo "test" > virtual_file
+   ```
+   Access will depend on the new permissions and ownership.
+
+### Using the CLI Log Tool
 Instead of reading the raw text log, use the cli_query tool to filter events.
 
 ```bash
 # View all WRITE operations
 ./cli_query --op WRITE
 
-# View operations by specific user (e.g., root or your username)
-./cli_query --user root
-
 # View operations on a specific file
-./cli_query --file virtual_file
+./cli_query --file test.txt
 ```
 
-🧹 Cleanup & Uninstall
+### Cleanup & Uninstall
 When you are done, you must unmount the file system properly.
 
 1. Stop the Server: Press Ctrl + C in Terminal 1.
@@ -151,7 +190,7 @@ rm -rf .backup virtual_fs.log
 rmdir /tmp/vfs_mount
 ```
 
-📂 Project Structure
+### Project Structure
 main.c: Entry point, initializes FUSE.
 
 operations.c: Core logic (Create, Read, Write, Delete, Backup).
