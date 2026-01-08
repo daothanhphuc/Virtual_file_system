@@ -71,6 +71,36 @@ int check_permissions(int flags, int mode, uid_t file_uid, gid_t file_gid) {
     return r;
 }
 
+int check_chown_permission(uid_t file_uid, uid_t new_uid, gid_t new_gid) {
+    struct fuse_context *ctx = fuse_get_context();
+    if (!ctx) return 0;
+
+    uid_t caller_uid = ctx->uid;
+
+    // 1. Nếu là Root -> Cho phép tất cả
+    if (caller_uid == 0) return 1;
+
+    // 2. Nếu người gọi KHÔNG PHẢI là chủ sở hữu file -> Cấm tiệt
+    if (caller_uid != file_uid) {
+        printf("[DEBUG-CHOWN] Denied: Caller %d is not owner %d\n", caller_uid, file_uid);
+        return 0;
+    }
+
+    // 3. Nếu là Owner file:
+    // Linux chuẩn rất khắt khe: Owner không được đổi UID của file sang người khác (để tránh đẩy file rác).
+    // Tuy nhiên, để bạn dễ test trong đồ án này, ta có thể "nới lỏng" luật:
+    // -> Cho phép Owner đổi quyền sở hữu (nếu bạn muốn).
+    
+    // Nếu muốn làm CHUẨN LINUX (Khắt khe):
+    if (new_uid != -1 && new_uid != file_uid) {
+        printf("[DEBUG-CHOWN] Denied: Non-root user cannot change UID\n");
+        return 0; // Cấm user thường chuyển file cho người khác
+    }
+
+    // Nếu chỉ đổi Group (new_uid == -1) -> Cho phép (đơn giản hóa)
+    return 1;
+}
+
 // Các hàm cập nhật metadata (như cũ)
 void update_virtual_file_permissions(int *virtual_file_permissions, int new_mode) {
     *virtual_file_permissions = new_mode & 0777;
