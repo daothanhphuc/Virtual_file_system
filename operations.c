@@ -15,15 +15,11 @@
 #include "logging.h"
 #include "permissions.h"
 
-// Thư mục lưu trữ các file bị thay đổi (Lớp phủ)
 #define STORAGE_DIR ".vfs_storage"
-// Thư mục lưu trữ backup phiên bản cũ
 #define BACKUP_DIR ".backup"
 
 extern char g_source_dir[PATH_MAX]; // Định nghĩa bên main.c
 static int backup_counter = 0;      // Biến đếm để tránh trùng tên file backup
-
-// --- CÁC HÀM HELPER VỀ ĐƯỜNG DẪN ---
 
 static void get_source_path(char fpath[PATH_MAX], const char *path) {
     snprintf(fpath, PATH_MAX, "%s%s", g_source_dir, path);
@@ -134,7 +130,6 @@ static int save_backup(const char *path) {
     return 0;
 }
 
-// --- CƠ CHẾ COPY-ON-WRITE (STORAGE) ---
 
 static int copy_source_to_storage(const char *path) {
     char src_path[PATH_MAX];
@@ -449,6 +444,38 @@ static int vfs_chmod(const char *path, mode_t mode) {
     return res == -1 ? -errno : 0;
 }
 
+static int vfs_chown(const char *path, uid_t uid, gid_t gid) {
+    char fpath[PATH_MAX];
+    
+    get_storage_path(fpath, path);
+    if (access(fpath, F_OK) == -1) get_source_path(fpath, path);
+
+    struct stat st;
+    if (lstat(fpath, &st) == -1) return -errno;
+
+    if (!check_chown_permission(st.st_uid, uid, gid)) {
+        struct fuse_context *ctx = fuse_get_context();
+        if (ctx) log_event("CHOWN_DENIED", path, ctx->pid, ctx->uid, -EPERM);
+        return -EPERM;
+    }
+
+    char storage_path[PATH_MAX];
+    get_storage_path(storage_path, path);
+    
+    if (access(storage_path, F_OK) == -1) {
+        int copy_res = copy_source_to_storage(path);
+        if (copy_res != 0) return copy_res;
+    }
+
+    int res = lchown(storage_path, uid, gid);
+    struct fuse_context *ctx = fuse_get_context();
+    if (ctx) log_event("CHOWN", path, ctx->pid, ctx->uid, res == -1 ? -errno : 0);
+    
+    if (res == -1) return -errno;
+    return 0;
+}
+
+// --- QUAN TRỌNG: PHẢI CÓ DÒNG .chown = vfs_chown Ở ĐÂY ---
 struct fuse_operations vfs_operations = {
     .getattr = vfs_getattr,
     .open = vfs_open,
@@ -457,6 +484,7 @@ struct fuse_operations vfs_operations = {
     .readdir = vfs_readdir,
     .truncate = vfs_truncate,
     .chmod = vfs_chmod,
+    .chown = vfs_chown,   // <--- DÒNG NÀY ĐĂNG KÝ HÀM CHOWN VỚI FUSE
     .unlink = vfs_unlink,
     .mkdir = vfs_mkdir,
     .create = vfs_create,
