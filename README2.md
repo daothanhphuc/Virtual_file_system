@@ -37,7 +37,7 @@ mkdir -p ~/my_source_data
 
 #write sample data into folder
 echo "Day la file that 1" > ~/my_source_data/test.txt
-echo "Day la file that 222" > ~/my_source_data/test_2.txt
+echo "Day la file that version 2" > ~/my_source_data/test_2.txt
 
 #visualize to check
 ls
@@ -106,7 +106,7 @@ cat .backup/virtual_file_20251231_181918.bak
 3. Restore a file
    To restore, simply copy the backup file back to the mount point.
 
-Scenario A: If the file was deleted
+Scenario A: If the file was deleted 
 
 ```bash
 cp .backup/virtual_file_20251231_181918.bak /tmp/vfs_mount/test.txt
@@ -119,46 +119,60 @@ cp .backup/virtual_file_20251231_181918.bak /tmp/vfs_mount/test.txt
 ```
 
 ### Check Permissions (chmod)
-
+CD to the /tmp/vfs_mount/
 1. Change the file permissions to none (no read/write/execute):
    ```bash
-   chmod 000 virtual_file
+   chmod 000 test.txt
    ```
    Now, reading or writing should fail:
    ```bash
-   cat virtual_file           # Permission denied
-   echo "test" > virtual_file # Permission denied
+   cat test.txt           # Permission denied
+   echo "test" > test.txt # Permission denied
    ```
 2. Set the file to read-only:
    ```bash
-   chmod 444 virtual_file
-   cat virtual_file           # Should succeed
-   echo "test" > virtual_file # Permission denied
+   chmod 444 test.txt
+   cat test.txt           # Should succeed
+   echo "test" > test.txt # Permission denied
    ```
 3. Set the file to write-only:
    ```bash
-   chmod 222 virtual_file
-   cat virtual_file           # Permission denied
-   echo "test" > virtual_file # Should succeed
+   chmod 222 test.txt
+   cat test.txt           # Permission denied
+   echo "test" > test.txt # Should succeed
    ```
 4. Restore to read/write:
    ```bash
-   chmod 644 virtual_file
+   chmod 644 test.txt
    ```
    Both read and write should work.
+--> To check permission, run the command: ls -n /tmp/vfs_mount/test.txt 
 
-### Change File Owner/Group (chown)
+### On development: Change File Owner/Group (chown)
 
-1. Change the file owner (requires root):
+1. Change the file owner (using user's role):
    ```bash
-   sudo chown <newuser>:<newgroup> virtual_file
+   chown 1001 test.txt
    ```
-2. Test access as the new user:
+   Result should be "chown: changing ownership of 'test_chown.txt': Operation not permitted"
+2. Change the group:
    ```bash
-   sudo -u <newuser> cat virtual_file
-   sudo -u <newuser> echo "test" > virtual_file
+   chown :1000 test_chown.txt
    ```
-   Access will depend on the new permissions and ownership.
+   "Success"
+3. Change the file owner (requires root):
+   ```bash
+   sudo chown 1005 /tmp/vfs_mount/test.txt
+   sudo useradd -u 1005 -M -s /bin/bash tester1005 # create dummy user
+   ls -n /tmp/vfs_mount/test.txt  # check permission
+   sudo chmod 400 /tmp/vfs_mount/test.txt # add a role to test
+   sudo -u tester1005 cat /tmp/vfs_mount/test.txt
+   ```
+   Command "cat /tmp/vfs_mount/test.txt" should print "Permission denied"
+4. Test Copy-On-Write Function:
+   ```bash
+   ls -l ~/my_project/.vfs_storage/test.txt
+   ```
 
 ### Using the CLI Log Tool
 Instead of reading the raw text log, use the cli_query tool to filter events.
@@ -189,14 +203,37 @@ rm vfs cli_query *.o
 rm -rf .backup virtual_fs.log
 rmdir /tmp/vfs_mount
 ```
+### Project's progress:
 
-### Project Structure
-main.c: Entry point, initializes FUSE.
+#### Completed Features
+- Core FUSE-based virtual file system implemented with read, write, open, and directory operations.
+- Copy-on-write and backup/versioning mechanism (.backup folder) for file modifications and deletions.
+- Permission and ownership management (chmod, chown) with enforcement and logging.
+- Logging system with detailed metadata (timestamp, uid, username, pid, operation, path, result).
+- CLI log query tool (`cli_query`) for filtering and viewing log events by user, file, or operation.
+- Data recovery workflow for restoring files from backups.
+- Automated test script for basic file system operations and permission checks.
 
-operations.c: Core logic (Create, Read, Write, Delete, Backup).
+#### In Progress / To Do
 
-logging.c: Handles writing logs to virtual_fs.log.
+- Implement support for additional essential file system commands:
+   - `cp` (copy files)
+   - `mv` (move/rename files)
+   - `touch` (create empty files or update timestamps)
+   - `truncate` (shrink or extend file size)
+   - `stat` (display file or filesystem status)
+   - `find` (search for files)
+   - `df` (report file system disk space usage)
+   - `du` (estimate file space usage)
+   - `ln` (create hard and symbolic links)
+   - `sync` (flush file system buffers)
+- Further testing for edge cases (e.g., concurrent access, large files, unusual permission scenarios).
+- Additional CLI log query features (e.g., export, advanced filters).
+- Documentation enhancements and usage examples.
+- Optional: Cross-platform support improvements (native Windows, MacOS).
 
-cli_query.c: Source code for the log viewer tool.
+#### Status
+- The core functionality is complete and stable for typical use cases on Linux/WSL2.
+- The project is ready for further testing, documentation, and optional feature expansion.
 
-.backup/: Hidden folder where backups are stored.
+### Member roles:
