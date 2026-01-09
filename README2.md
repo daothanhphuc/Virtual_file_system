@@ -148,7 +148,20 @@ CD to the /tmp/vfs_mount/
    Both read and write should work.
 --> To check permission, run the command: ls -n /tmp/vfs_mount/test.txt 
 
-### On development: Change File Owner/Group (chown)
+### Using the CLI Log Tool
+Instead of reading the raw text log, use the cli_query tool to filter events.
+
+```bash
+# View all WRITE operations
+./cli_query --op WRITE
+
+# View operations on a specific file
+./cli_query --file test.txt
+```
+
+### On development: 
+
+#### Change File Owner/Group (chown)
 
 1. Change the file owner (using user's role):
    ```bash
@@ -173,16 +186,29 @@ CD to the /tmp/vfs_mount/
    ```bash
    ls -l ~/my_project/.vfs_storage/test.txt
    ```
-
-### Using the CLI Log Tool
-Instead of reading the raw text log, use the cli_query tool to filter events.
-
+#### Move/Rename a File (mv)
 ```bash
-# View all WRITE operations
-./cli_query --op WRITE
+mv /tmp/vfs_mount/test.txt /tmp/vfs_mount/test_renamed.txt
+ls /tmp/vfs_mount
+cat /tmp/vfs_mount/test_renamed.txt
+```
 
-# View operations on a specific file
-./cli_query --file test.txt
+#### Copy a File (cp)
+```bash
+cp /tmp/vfs_mount/test_renamed.txt /tmp/vfs_mount/test_copy.txt
+ls /tmp/vfs_mount
+cat /tmp/vfs_mount/test_copy.txt
+```
+
+#### Create/Update a File (touch)
+```bash
+# Create a new empty file
+touch /tmp/vfs_mount/newfile.txt
+ls -l /tmp/vfs_mount/newfile.txt
+
+# Update the timestamp of an existing file
+touch /tmp/vfs_mount/test_copy.txt
+ls -l /tmp/vfs_mount/test_copy.txt
 ```
 
 ### Cleanup & Uninstall
@@ -217,9 +243,6 @@ rmdir /tmp/vfs_mount
 #### In Progress / To Do
 
 - Implement support for additional essential file system commands:
-   - `cp` (copy files)
-   - `mv` (move/rename files)
-   - `touch` (create empty files or update timestamps)
    - `truncate` (shrink or extend file size)
    - `stat` (display file or filesystem status)
    - `find` (search for files)
@@ -237,3 +260,11 @@ rmdir /tmp/vfs_mount
 - The project is ready for further testing, documentation, and optional feature expansion.
 
 ### Member roles:
+
+#### Khai
+
+#### Quan
+
+#### Phuc
+
+#### Manh
