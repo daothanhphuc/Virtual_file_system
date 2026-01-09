@@ -52,8 +52,6 @@ static int mkdir_p(const char *path) {
     return mkdir(tmp, 0755);
 }
 
-// --- HÀM BACKUP (VERSIONING) ---
-
 static int save_backup(const char *path) {
     char source_file_path[PATH_MAX];
     char storage_file_path[PATH_MAX];
@@ -212,19 +210,24 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
         closedir(dp_storage);
     }
 
-    // 2. SOURCE (Deduplicate)
+    // 2. SOURCE (Deduplicate + Check Whiteout)
     DIR *dp_source = opendir(source_path);
     if (dp_source != NULL) {
         struct dirent *de;
         while ((de = readdir(dp_source)) != NULL) {
             if(strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
 
+            // Kiểm tra trùng tên trong Storage
             char check_duplicate_path[PATH_MAX];
             snprintf(check_duplicate_path, PATH_MAX, "%s/%s", storage_path, de->d_name);
-            
-            if (access(check_duplicate_path, F_OK) == 0) {
-                continue; 
-            }
+            if (access(check_duplicate_path, F_OK) == 0) continue; 
+
+            // --- ĐOẠN MỚI THÊM: KIỂM TRA WHITEOUT ---
+            // Nếu tồn tại file .wh.tên_file trong Storage -> Bỏ qua không hiện
+            char wh_path[PATH_MAX];
+            snprintf(wh_path, PATH_MAX, "%s/.wh.%s", storage_path, de->d_name);
+            if (access(wh_path, F_OK) == 0) continue; 
+            // ---------------------------------------
 
             struct stat st;
             memset(&st, 0, sizeof(st));
@@ -373,15 +376,24 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
     char fpath[PATH_MAX];
     get_storage_path(fpath, path);
 
+    // 1. Tạo thư mục cha nếu chưa có
     char *tmp_path = strdup(fpath);
     mkdir_p(dirname(tmp_path));
     free(tmp_path);
 
-    int res = creat(fpath, mode);
-    if (res == -1) return -errno;
-    close(res);
-
+    // 2. Lấy thông tin người dùng đang gọi lệnh (ví dụ: phuc)
     struct fuse_context *ctx = fuse_get_context();
+
+    // 3. Tạo file thật
+    int fd = creat(fpath, mode);
+    if (fd == -1) return -errno;
+    
+    // --- FIX QUAN TRỌNG: CHOWN NGAY LẬP TỨC ---
+    // Chuyển chủ sở hữu file từ root sang phuc (ctx->uid)
+    fchown(fd, ctx->uid, ctx->gid); 
+
+    close(fd);
+
     if (ctx) log_event("CREATE", path, ctx->pid, ctx->uid, 0);
     return 0;
 }
@@ -475,7 +487,89 @@ static int vfs_chown(const char *path, uid_t uid, gid_t gid) {
     return 0;
 }
 
-// --- QUAN TRỌNG: PHẢI CÓ DÒNG .chown = vfs_chown Ở ĐÂY ---
+static int vfs_rename(const char *from, const char *to) {
+    char ffrom[PATH_MAX];
+    char fto[PATH_MAX];
+    int is_source_file = 0; // Cờ đánh dấu file này nằm ở source
+
+    get_storage_path(ffrom, from);
+    get_storage_path(fto, to);
+
+    // Kiểm tra nếu file chưa có ở Storage (tức là file Source)
+    if (access(ffrom, F_OK) == -1) {
+        char fsource[PATH_MAX];
+        get_source_path(fsource, from);
+        if (access(fsource, F_OK) == 0) {
+            // Copy từ Source sang Storage
+            int cp_res = copy_source_to_storage(from);
+            if (cp_res != 0) return cp_res;
+            is_source_file = 1; // Đánh dấu đây là file gốc cần che đi
+        } else {
+            return -ENOENT;
+        }
+    }
+
+    // Tạo thư mục cha cho đích đến
+    char *tmp_to = strdup(fto);
+    mkdir_p(dirname(tmp_to));
+    free(tmp_to);
+
+    // Thực hiện rename trong Storage
+    int res = rename(ffrom, fto);
+    
+    // --- ĐOẠN MỚI THÊM: TẠO WHITEOUT ---
+    // Nếu rename thành công VÀ file gốc nằm ở source -> Tạo file .wh. để che
+    if (res == 0 && is_source_file) {
+        char wh_path[PATH_MAX];
+        char *dname = strdup(from); // Lấy tên file từ path (ví dụ /test.txt -> test.txt)
+        
+        // Xử lý lấy tên file (basename)
+        char *base = basename(dname);
+        
+        // Tạo đường dẫn file whiteout: .vfs_storage/.wh.test.txt
+        char storage_dir[PATH_MAX];
+        get_storage_path(storage_dir, ""); // Lấy root storage
+        // Cẩn thận logic path ở đây, cách đơn giản nhất là dùng dirname của ffrom
+        
+        char ffrom_dir[PATH_MAX];
+        strcpy(ffrom_dir, ffrom);
+        dirname(ffrom_dir); // Lấy thư mục chứa file cũ
+
+        snprintf(wh_path, PATH_MAX, "%s/.wh.%s", ffrom_dir, base);
+        
+        // Tạo file rỗng .wh.
+        int fd = creat(wh_path, 0600);
+        if (fd >= 0) close(fd);
+        
+        free(dname);
+    }
+
+    struct fuse_context *ctx = fuse_get_context();
+    if (ctx) log_event("RENAME", from, ctx->pid, ctx->uid, res == -1 ? -errno : 0);
+    
+    if (res == -1) return -errno;
+    return 0;
+}
+
+static int vfs_utimens(const char *path, const struct timespec tv[2]) {
+    char fpath[PATH_MAX];
+    get_storage_path(fpath, path);
+
+    // Nếu file chưa có ở Storage -> Copy sang để update time
+    if (access(fpath, F_OK) == -1) {
+        int cp_res = copy_source_to_storage(path);
+        if (cp_res != 0) return cp_res;
+    }
+
+    int res = utimensat(AT_FDCWD, fpath, tv, 0);
+    
+    struct fuse_context *ctx = fuse_get_context();
+    if (ctx) log_event("UTIMENS", path, ctx->pid, ctx->uid, res == -1 ? -errno : 0);
+    
+    if (res == -1) return -errno;
+    return 0;
+}
+
 struct fuse_operations vfs_operations = {
     .getattr = vfs_getattr,
     .open = vfs_open,
@@ -484,8 +578,10 @@ struct fuse_operations vfs_operations = {
     .readdir = vfs_readdir,
     .truncate = vfs_truncate,
     .chmod = vfs_chmod,
-    .chown = vfs_chown,   // <--- DÒNG NÀY ĐĂNG KÝ HÀM CHOWN VỚI FUSE
+    .chown = vfs_chown,
     .unlink = vfs_unlink,
     .mkdir = vfs_mkdir,
     .create = vfs_create,
+    .rename = vfs_rename,
+    .utimens = vfs_utimens,
 };
