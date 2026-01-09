@@ -52,7 +52,9 @@ mkdir -p /tmp/vfs_mount
 
 # Run the VFS in foreground mode
 ./vfs -f ~/my_source_data /tmp/vfs_mount
-
+# Run the VFS with root role
+sudo ./vfs -o allow_other -f ~/my_source_data /tmp/vfs_mount
+sudo /etc/nano/
 ```
 
 The terminal will hang/pause here. This is normal. The server is running.
@@ -65,7 +67,8 @@ Create a file:
 ```bash
 echo "Hello World" > /tmp/vfs_mount/test.txt
 ```
-
+If "-bash: echo: write error: Permission denied" --> run "ls -ld ~/my_project/.vfs_storage/ ~/my_project/.backup/" to check 'root'
+#  sudo chown -R <user>:<user> .vfs_storage .backup if needed
 Read the file:
 
 ```bash
@@ -78,12 +81,14 @@ Modify the file (Triggers Backup):
 echo "New Content" > /tmp/vfs_mount/test.txt
 ```
 
+#### !!! Need checkout again
 Delete the file (Triggers Recycle Bin):
 
 ```bash
 rm /tmp/vfs_mount/test.txt
 ```
 
+# !!!! Need checkout again:
 ### Data Recovery (How to Restore)
 When a file is modified or deleted, a backup is automatically saved in the hidden .backup folder.
 
@@ -158,6 +163,7 @@ Instead of reading the raw text log, use the cli_query tool to filter events.
 # View operations on a specific file
 ./cli_query --file test.txt
 ```
+Require stay in the project folder to run 
 
 ### On development: 
 
@@ -180,6 +186,7 @@ Instead of reading the raw text log, use the cli_query tool to filter events.
    ls -n /tmp/vfs_mount/test.txt  # check permission
    sudo chmod 400 /tmp/vfs_mount/test.txt # add a role to test
    sudo -u tester1005 cat /tmp/vfs_mount/test.txt
+   sudo userdel tester1005 # delete dummy user
    ```
    Command "cat /tmp/vfs_mount/test.txt" should print "Permission denied"
 4. Test Copy-On-Write Function:
@@ -207,8 +214,8 @@ touch /tmp/vfs_mount/newfile.txt
 ls -l /tmp/vfs_mount/newfile.txt
 
 # Update the timestamp of an existing file
-touch /tmp/vfs_mount/test_copy.txt
-ls -l /tmp/vfs_mount/test_copy.txt
+touch /tmp/vfs_mount/newfile.txt
+ls -l /tmp/vfs_mount/newfile.txt
 ```
 
 ### Cleanup & Uninstall
@@ -260,11 +267,11 @@ rmdir /tmp/vfs_mount
 - The project is ready for further testing, documentation, and optional feature expansion.
 
 ### Member roles:
-
-#### Khai
-
+#### Khai:
+1. Emplement "chmod", "chown" related functions
 #### Quan
-
+1. Emplement "backup", "logging" related functions
 #### Phuc
-
+1. Emplement "write", core path functions and utility functions ( cp, mv, touch, truncate, unlink)
 #### Manh
+1. Emplement "read", "open" dir and file functions
